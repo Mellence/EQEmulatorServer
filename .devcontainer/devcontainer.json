@@ -2,10 +2,10 @@
 // README at: https://github.com/devcontainers/templates/tree/main/src/ubuntu
 {
 	"name": "eqemu",
-	"build": {
-		"dockerfile": "Dockerfile.debian.dev"
-	},
-	"appPort": [
+    "dockerComposeFile": "docker-compose.yml",
+    "service": "devcontainer",
+    "workspaceFolder": "/src",
+    "appPort": [
 		"5998:5998/udp",
 		"7000:7000/udp",
 		"7001:7001/udp",
@@ -23,7 +23,7 @@
 		"LOCALWSF": "${localWorkspaceFolder}",
 		"CONTAINERWSF": "${containerWorkspaceFolder}"
 	},
-	"containerUser": "vscode",
+	"containerUser": "peq",
 	// add ptrace
 	"runArgs": [
 		"--cap-add=SYS_PTRACE",
@@ -71,10 +71,4 @@
 			}
 		}
 	},
-	"mounts": [
-    "source=${localWorkspaceFolder}/.devcontainer/Makefile,target=/src/Makefile,type=bind,consistency=cached"
-	],
-
-	"workspaceFolder": "/src",
-	"workspaceMount": "source=${localWorkspaceFolder},target=/src,type=bind,consistency=cached"
 }

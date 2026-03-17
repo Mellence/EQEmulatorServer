@@ -1,0 +1,44 @@
+services:
+  devcontainer:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    volumes:
+      - ..:/src:cached,z
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    working_dir: /src
+    command: bash -c "ln -sf /src/.devcontainer/Makefile /src/Makefile; sleep infinity"
+    ports:
+      - "5998:5998/udp"
+      - "7000-7400:7000-7400/udp"
+      - "9000:9000/udp"
+      - "9001:9001/udp"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+  db:
+    image: mariadb:11.4
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+volumes:
+  mariadb-data:

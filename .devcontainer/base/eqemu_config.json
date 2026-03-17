@@ -8,11 +8,11 @@
 			}
 		},
 		"qsdatabase": {
-			"host": "127.0.0.1",
+			"host": "db",
 			"port": "3306",
-			"username": "peq",
-			"password": "peqpass",
-			"db": "peq"
+			"username": "__DB_USER__",
+			"password": "__DB_PASS__",
+			"db": "__DB_NAME__"
 		},
 		"chatserver": {
 			"port": "7778",
@@ -54,11 +54,11 @@
 			"shortname": "dev"
 		},
 		"database": {
-			"db": "peq",
-			"host": "127.0.0.1",
+			"db": "__DB_NAME__",
+			"host": "db",
 			"port": "3306",
-			"username": "peq",
-			"password": "peqpass"
+			"username": "__DB_USER__",
+			"password": "__DB_PASS__"
 		},
 		"files": {
 			"opcodes": "assets/patches/opcodes.conf",

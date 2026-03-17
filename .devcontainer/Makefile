@@ -7,7 +7,7 @@
 NAME := eqemu-server
 
 .PHONY: prep
-prep: is-vscode
+prep: is-container
 	@echo "Preparing build/bin for usage..."
 
 	@echo "Prepping folders..."
@@ -17,9 +17,11 @@ prep: is-vscode
 	@mkdir -p build/bin/logs
 	@mkdir -p build/bin/shared
 	@mkdir -p build/bin/assets
+	@mkdir -p build/bin/logs/zone
 
 	@echo "Applying overrides..."
 	@if [ ! -f .devcontainer/override/eqemu_config.json ]; then cp .devcontainer/base/eqemu_config.json .devcontainer/override/eqemu_config.json; fi
+	@sed -i -e "s/__DB_USER__/$(DB_USER)/g" -e "s/__DB_PASS__/$(DB_PASS)/g" -e "s/__DB_NAME__/$(DB_NAME)/g" .devcontainer/override/eqemu_config.json
 	@if [ -f build/bin/eqemu_config.json ]; then unlink build/bin/eqemu_config.json; fi
 	cd build/bin && ln -s ../../.devcontainer/override/eqemu_config.json eqemu_config.json
 	@if [ ! -f .devcontainer/override/login.json ]; then cp .devcontainer/base/login.json .devcontainer/override/login.json; fi
@@ -51,17 +53,17 @@ prep: is-vscode
 
 	@echo "Eqemu is prepared. Edit build/bin/eqemu_config.json to configure."
 
-is-vscode:
-	@if [ -z "$$REMOTE_CONTAINERS" ]; then \
-		echo "Not running in VS Code devcontainer"; \
+is-container:
+	@if [ ! -f /.dockerenv ]; then \
+		echo "Not running in Docker container"; \
 		exit 1; \
 	fi
 
-clean: is-vscode
+clean: is-container
 	rm -rf build
 
 .PHONY: maps
-maps: is-vscode
+maps: is-container
 	@echo "Downloading maps..."
 	@mkdir -p .devcontainer/repo/maps
 	@cd .devcontainer/repo/maps && wget -nc https://github.com/EQEmu/maps/archive/refs/heads/master.zip
@@ -72,12 +74,12 @@ maps: is-vscode
 
 # Runs tests
 .PHONY: test
-test: is-vscode
+test: is-container
 	cd build/bin && ./tests
 
 # Runs login binary
 .PHONY: login
-login: is-vscode check-mariadb
+login: is-container check-mariadb
 	cd build/bin && ./loginserver
 
 .PHONY: hotfix
@@ -85,58 +87,62 @@ hotfix: shared
 
 # Runs shared_memory binary
 .PHONY: shared
-shared: is-vscode check-mariadb
+shared: is-container check-mariadb
 	cd build/bin && ./shared_memory
 
 # Runs zone binary
 .PHONY: zone
-zone: is-vscode check-mariadb
+zone: is-container check-mariadb
 	@find build/bin/logs/zone/ -type f -name 'zone*.log' -exec rm -f {} +
 	cd build/bin && ./zone
 
-check-mariadb: is-vscode
-	@if ! sudo service mariadb status | grep -q 'active (running)'; then \
-		sudo service mariadb start; \
+check-mariadb: is-container
+	@mariadb -h db -u $(DB_USER) -p$(DB_PASS) -e "SELECT 1" > /dev/null 2>&1 || (echo "Cannot reach MariaDB at db:3306"; exit 1)
+
+.PHONY: set-expansion
+set-expansion: is-container check-mariadb
+	@mariadb -h db -u $(DB_USER) -p$(DB_PASS) --database $(DB_NAME) -e\
+			"UPDATE rule_values SET rule_value='0' WHERE rule_name='Expansion:CurrentExpansion';"
+	@echo "Expansion set to Classic (0)."
+
+.PHONY: advance-expansion
+advance-expansion: is-container check-mariadb
+	@if [ -z "$(EXP)" ]; then \
+			echo "Usage: make advance-expansion EXP=<number> (0=classic...8=OmensofWar)"; \
+			exit 1; \
 	fi
+	@mariadb -h db -u $(DB_USER) -p$(DB_PASS) --database $(DB_NAME) -e \
+			"UPDATE rule_values SET rule_value='$(EXP)' WHERE rule_name='Expansion:CurrentExpansion';"
+	@echo "DB updated to expansion $(EXP). Log in as GM and run #reload rules global and #repopworld"
 
 # Runs world binary
 .PHONY: world
-world: is-vscode check-mariadb
+world: is-container check-mariadb
 	@find build/bin/logs/ -type f -name 'world*.log' -exec rm -f {} +
 	cd build/bin && ./world
 
 # Runs ucs binary
 .PHONY: ucs
-ucs: is-vscode check-mariadb
+ucs: is-container check-mariadb
 	@find build/bin/logs/ -type f -name 'ucs*.log' -exec rm -f {} +
 	cd build/bin && ./ucs
 
 # Runs queryserv binary
 .PHONY: queryserv
-queryserv: is-vscode check-mariadb
+queryserv: is-container check-mariadb
 	@find build/bin/logs/ -type f -name 'query_server*.log' -exec rm -f {} +
 	cd build/bin && ./queryserv
 
 reset-content:
 	@echo "Resetting content tables in database peq..."
-	cd .devcontainer/cache/db/peq-dump && sudo mariadb --database peq -e "source create_tables_content.sql"
+	cd .devcontainer/cache/db/peq-dump && sudo mariadb -h db -u $(DB_USER) -p$(DB_PASS) --database $(DB_NAME) -e "source create_tables_content.sql"
 
-valgrind-%: is-vscode
+valgrind-%: is-container
 	cd build/bin && valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --verbose --log-file=logs/$*.valgrind.log ./$*
-
-# Start mariaDB standalone
-.PHONY: mariadb
-mariadb:
-	@sudo service mariadb start
 
 .PHONY: inject-mariadb
 inject-mariadb:
-	-sudo service mariadb start
 	-mkdir -p .devcontainer/cache/db/
-	-sudo mariadb -e 'DROP DATABASE IF EXISTS peq;'
-	-sudo mariadb -e 'CREATE DATABASE peq;'
-	-sudo mariadb -e "CREATE USER IF NOT EXISTS 'peq'@'127.0.0.1' IDENTIFIED BY 'peqpass';"
-	-sudo mariadb -e "GRANT ALL PRIVILEGES ON *.* TO 'peq'@'127.0.0.1';"
 ifeq (,$(wildcard .devcontainer/cache/db/db.sql.zip))
 	@echo ".devcontainer/cache/db.sql.zip not found. Downloading database from https://db.eqemu.dev/latest"
 	wget -nc https://db.eqemu.dev/latest -O .devcontainer/cache/db/db.sql.zip
@@ -144,22 +150,22 @@ ifeq (,$(wildcard .devcontainer/cache/db/db.sql.zip))
 endif
 	@echo "Sourcing db may take a while, please wait..."
 
-	@cd .devcontainer/cache/db/peq-dump && sudo mariadb --database peq -e "source create_tables_content.sql"
-	@cd .devcontainer/cache/db/peq-dump && sudo mariadb --database peq -e "source create_tables_login.sql"
-	@cd .devcontainer/cache/db/peq-dump && sudo mariadb --database peq -e "source create_tables_player.sql"
-	@# deprecated cd .devcontainer/cache/db/peq-dump && sudo mariadb --database peq -e "source create_tables_queryserv.sql"
-	@cd .devcontainer/cache/db/peq-dump && sudo mariadb --database peq -e "source create_tables_state.sql"
-	@cd .devcontainer/cache/db/peq-dump && sudo mariadb --database peq -e "source create_tables_system.sql"
-
+	@cd .devcontainer/cache/db/peq-dump && sudo mariadb -h db -u $(DB_USER) -p$(DB_PASS) --database $(DB_NAME) -e "source create_tables_content.sql"
+	@cd .devcontainer/cache/db/peq-dump && sudo mariadb -h db -u $(DB_USER) -p$(DB_PASS) --database $(DB_NAME) -e "source create_tables_login.sql"
+	@cd .devcontainer/cache/db/peq-dump && sudo mariadb -h db -u $(DB_USER) -p$(DB_PASS) --database $(DB_NAME) -e "source create_tables_player.sql"
+	@# deprecated cd .devcontainer/cache/db/peq-dump && sudo mariadb -h db -u $(DB_USER) -p$(DB_PASS) --database $(DB_NAME) -e "source create_tables_queryserv.sql"
+	@cd .devcontainer/cache/db/peq-dump && sudo mariadb -h db -u $(DB_USER) -p$(DB_PASS) --database $(DB_NAME) -e "source create_tables_state.sql"
+	@cd .devcontainer/cache/db/peq-dump && sudo mariadb -h db -u $(DB_USER) -p$(DB_PASS) --database $(DB_NAME) -e "source create_tables_system.sql"
+	@$(MAKE) set-expansion
 	@echo "MariaDB is now injected."
 
 .PHONY: gm-%
-gm-%: is-vscode
-	sudo mariadb --database peq -e "UPDATE account SET status=255 WHERE name = '$*';"
+gm-%: is-container
+	sudo mariadb -h db -u peq -p$(DB_PASS) --database peq -e "UPDATE account SET status=255 WHERE name = '$*';"
 	@echo "Account $* is now a GM. /camp to have it go into effect."
 
-depends: is-vscode
-	sudo apt install graphviz pip time
+depends: is-container
+	sudo apt-get install graphviz pip time
 	pip3 install graphviz
 	mkdir -p build/depends
 	@if [ ! -f "build/depends/dependency_graph.py" ]; then \
@@ -175,20 +181,20 @@ depends: is-vscode
 	@echo "Common..."
 	time python3 build/depends/dependency_graph.py -f png common build/depends/common.dot
 
-backup: is-vscode
+backup: is-container
 	@mkdir -p build/bin/backup
 	cd build/bin && ./world database:dump --compress --player-tables --state-tables --system-tables --query-serv-tables
 
-restore-%: is-vscode
+restore-%: is-container
 	@if [ -z "$*" ]; then \
 		echo "Please provide a backup file to restore from. Example: make restore-backup.sql"; \
 		exit 1; \
 	fi
 	@echo "Restoring from backup $*"
-	@sudo mariadb --database peq -e "$*"
+	@sudo mariadb -h db -u peq -p$(DB_PASS) --database peq -e "$*"
 
 
-cpu-zone: is-vscode
+cpu-zone: is-container
 ifeq ($(findstring .devcontainer,$(CURDIR)),.devcontainer)
 	@echo "This makefile is not intended to be run from the .devcontainer directory."
 	exit
@@ -196,21 +202,21 @@ endif
 	@cd build/bin && mkdir -p tmp
 	cd build/bin && CPUPROFILE=prof.out ./zone
 
-pprof-zone: is-vscode
+pprof-zone: is-container
 ifeq ($(findstring .devcontainer,$(CURDIR)),.devcontainer)
 	@echo "This makefile is not intended to be run from the .devcontainer directory."
 	exit
 endif
 	cd build/bin && google-pprof --pdf zone prof.out > prof.pdf
 
-pprof-gv-zone: is-vscode
+pprof-gv-zone: is-container
 ifeq ($(findstring .devcontainer,$(CURDIR)),.devcontainer)
 	@echo "This makefile is not intended to be run from the .devcontainer directory."
 	exit
 endif
 	cd build/bin && google-pprof --gv zone prof.out > prof.gv
 
-heap-zone: is-vscode
+heap-zone: is-container
 ifeq ($(findstring .devcontainer,$(CURDIR)),.devcontainer)
 	@echo "This makefile is not intended to be run from the .devcontainer directory."
 	exit
